@@ -1,51 +1,30 @@
 
-from __future__ import print_function
-
-from multiprocessing import Process, Pipe, Lock
-import sys
-import time
 import traceback
-
-l = Lock()
-
-def locked_print(*args):
-    l.acquire()
-
-    try:
-        print(file=sys.stderr, *args)
-    finally:
-        l.release()
-
-def a():
-    v = yield
-    locked_print('a', v)
-    while True:
-        v = yield -v + 1
-        locked_print('a', v)
-
-def b():
-    v = yield -1
-    locked_print('b', v)
-    for x in range(10):
-        v = yield -v - 1
-        locked_print('b', v)
-    yield Parallel(-v - 1)
-    for x in range(100):
-        v = yield Parallel(-v - 1)
-        locked_print('b', v)
-
-    v = 0
-    yield v
-    for x in range(100):
-        v = yield -v - 1
-        locked_print('b', v)
-
 
 class Parallel(object):
     def __init__(self, arg):
         self.arg = arg
 
 def pipeyield(iterator, pipe, start=False):
+    """
+    Execute chain of events represented as an iterator, sending yielded values
+    through the pipes.
+
+    Think of this as of yield-generated coroutines executed in the different
+    processes.
+
+    The chain is first executed until the first yield and then the yielded
+    value is sent to the remote chain where it is pushed into as a value
+    returned by yield.
+
+    Whenever a process yields a `Parallel` class or its instance the parallel
+    execution of coroutines starts. For this the value is sent to the remote
+    end and both local and remote execution continues to the next yield.
+    Note that only one coroutine is allowed to start `Parallel` execution.
+
+    The values generated as responses to the `Parallel` start or finish are
+    ignored.
+    """
     v = iterator.next()
     if not start and v is not None:
         pipe.close()
@@ -62,7 +41,7 @@ def pipeyield(iterator, pipe, start=False):
             if parallel != 1:
                 r = pipe.recv()
                 if r == "QUIT":
-                    return 0
+                    raise StopIteration
 
             v = iterator.send(r)
 
@@ -84,14 +63,3 @@ def pipeyield(iterator, pipe, start=False):
         traceback.print_exc()
         pipe.send("QUIT")
         return 1
-
-
-def main():
-    apipe, bpipe = Pipe()
-    p = Process(target=pipeyield, args=(a(), apipe))
-    p.start()
-    pipeyield(b(), bpipe, start=True)
-    p.join()
-
-if __name__ == "__main__":
-    main()
